@@ -64,33 +64,68 @@ async function analyzeCode(
 
   for (const file of parsedDiff) {
     if (file.to === "/dev/null") continue; // Ignore deleted files
+
+    const total_num_files = file.chunks.length;
+    let counter = 0;
     for (const chunk of file.chunks) {
-      const prompt = createPrompt(file, chunk, prDetails);
-      const aiResponse = await getAIResponse(prompt);
-      if (aiResponse) {
+      counter +=1;
+      if (counter >= total_num_files) {
+        const aiResponse = await getAIResponse(createFinalReview(file, chunk, prDetails));
+
+        if (!aiResponse) continue;
+
         const newComments = createComment(file, chunk, aiResponse);
+
         if (newComments) {
-          comments.push(...newComments);
+            comments.push(...newComments);
         }
+      } else {
+        await getAIResponse(buildUpReview(file, chunk, prDetails));
       }
+
     }
+
   }
   return comments;
 }
 
-function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
+function buildUpReview(file: File, chunk: Chunk, prDetails: PRDetails): string {
+  return `Your task is to review pull requests. The Instructions:
+- You are to review with the level of detail of a staff software engineer
+- You are to keep the context of previous code diffs passed in when constructing your review.
+- DO NOT review the code until you are asked to.
+
+Digest the following code diff in the file "${
+    file.to
+  }". Keep this in memory until you are prompted to review the entire pull request.
+
+Pull request title: ${prDetails.title}
+
+Git diff to review:
+
+\`\`\`diff
+${chunk.content}
+${chunk.changes
+  // @ts-expect-error - ln and ln2 exists where needed
+  .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
+  .join("\n")}
+\`\`\`
+`;
+}
+
+
+function createFinalReview(file: File, chunk: Chunk, prDetails: PRDetails): string {
   return `Your task is to review pull requests. Instructions:
 - Provide the response in following JSON format:  {"reviews": [{"lineNumber":  <line_number>, "reviewComment": "<review comment>"}]}
+- Keep in mind the previous code diffs passed in when making your comments.
 - Do not give positive comments or compliments.
 - Provide comments and suggestions ONLY if there is something to improve, otherwise "reviews" should be an empty array.
 - Write the comment in GitHub Markdown format.
 - Use the given description only for the overall context and only comment the code.
 - IMPORTANT: NEVER suggest adding comments to the code.
 
-Review the following code diff in the file "${
-    file.to
-  }" and take the pull request title and description into account when writing the response.
-  
+Review all the code snippets in context with each other from previous inputs and take the pull request title and description into account when writing the response.
+
 Pull request title: ${prDetails.title}
 Pull request description:
 
